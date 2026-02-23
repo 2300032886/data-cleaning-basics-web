@@ -1,3 +1,0 @@
-# This file is intentionally minimal.
-# Python dependencies for the Vercel serverless functions are in api/requirements.txt
-# Python dependencies for local backend development are in backend/requirements.txt

@@ -1,19 +1,27 @@
 """
 Vercel Python Serverless entry point.
-All /api/* requests are routed here by vercel.json.
-Uses /tmp for ephemeral storage (Vercel serverless constraint).
+Uses MySQL (via PyMySQL) when MYSQL_HOST env var is set.
+Falls back to SQLite in /tmp for local development.
 """
 import os
 import sys
 import uuid
 import json
-import sqlite3
 import io
 from pathlib import Path
 from datetime import datetime
 
-# Make sure sibling modules (cleaning, visualization) are importable
 sys.path.insert(0, os.path.dirname(__file__))
+
+# ─── DB mode detection ────────────────────────────────────────────────────────
+MYSQL_HOST = os.environ.get("MYSQL_HOST")
+USE_MYSQL = bool(MYSQL_HOST)
+
+if USE_MYSQL:
+    import pymysql
+    import pymysql.cursors
+else:
+    import sqlite3
 
 import pandas as pd
 import numpy as np
@@ -26,39 +34,95 @@ import visualization as viz
 app = Flask(__name__)
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 
-# In Vercel serverless, /tmp is the only writable directory
 UPLOAD_FOLDER = Path("/tmp/dcb_uploads")
 UPLOAD_FOLDER.mkdir(exist_ok=True)
 DB_PATH = UPLOAD_FOLDER / "metadata.db"
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
 
 
-# ─── DB helpers ────────────────────────────────────────────────────────────────
-def get_db():
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.row_factory = sqlite3.Row
-    return conn
+# ─── DB helpers ───────────────────────────────────────────────────────────────
+def get_mysql_conn():
+    return pymysql.connect(
+        host=os.environ["MYSQL_HOST"],
+        user=os.environ["MYSQL_USER"],
+        password=os.environ["MYSQL_PASSWORD"],
+        database=os.environ["MYSQL_DATABASE"],
+        port=int(os.environ.get("MYSQL_PORT", 3306)),
+        cursorclass=pymysql.cursors.DictCursor,
+        autocommit=False,
+    )
+
+
+def db_execute(sql, params=(), fetchone=False, fetchall=False, commit=False):
+    """
+    Unified query executor.
+    MySQL  → uses PyMySQL with %s placeholders.
+    SQLite → uses sqlite3 with ? placeholders.
+    """
+    if USE_MYSQL:
+        conn = get_mysql_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                result = None
+                if fetchone:
+                    result = cur.fetchone()
+                elif fetchall:
+                    result = cur.fetchall()
+                if commit:
+                    conn.commit()
+                return result
+        finally:
+            conn.close()
+    else:
+        # SQLite mode for local development
+        mysql_sql = sql  # SQLite already uses ? placeholders
+        conn = sqlite3.connect(str(DB_PATH))
+        conn.row_factory = sqlite3.Row
+        try:
+            cur = conn.execute(mysql_sql, params)
+            result = None
+            if fetchone:
+                row = cur.fetchone()
+                result = dict(row) if row else None
+            elif fetchall:
+                rows = cur.fetchall()
+                result = [dict(r) for r in rows]
+            if commit:
+                conn.commit()
+            return result
+        finally:
+            conn.close()
 
 
 def init_db():
-    conn = get_db()
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS sessions (
-            session_id TEXT PRIMARY KEY,
-            original_filename TEXT,
-            upload_time TEXT,
-            original_path TEXT,
-            cleaned_path TEXT
-        )
-    """)
-    conn.commit()
-    conn.close()
+    if USE_MYSQL:
+        sql = """
+            CREATE TABLE IF NOT EXISTS sessions (
+                session_id        VARCHAR(36) PRIMARY KEY,
+                original_filename VARCHAR(255),
+                upload_time       VARCHAR(50),
+                original_path     TEXT,
+                cleaned_path      TEXT
+            )
+        """
+    else:
+        sql = """
+            CREATE TABLE IF NOT EXISTS sessions (
+                session_id        TEXT PRIMARY KEY,
+                original_filename TEXT,
+                upload_time       TEXT,
+                original_path     TEXT,
+                cleaned_path      TEXT
+            )
+        """
+    db_execute(sql, commit=True)
 
 
 init_db()
 
 
-# ─── Utility ───────────────────────────────────────────────────────────────────
+# ─── Utility helpers ──────────────────────────────────────────────────────────
 def load_df(path: str) -> pd.DataFrame:
     if path.endswith(".xlsx") or path.endswith(".xls"):
         return pd.read_excel(path)
@@ -79,10 +143,15 @@ def save_df(df: pd.DataFrame, path: str):
 
 
 def get_session(session_id: str):
-    conn = get_db()
-    row = conn.execute("SELECT * FROM sessions WHERE session_id=?", (session_id,)).fetchone()
-    conn.close()
-    return dict(row) if row else None
+    if USE_MYSQL:
+        return db_execute(
+            "SELECT * FROM sessions WHERE session_id = %s",
+            (session_id,), fetchone=True,
+        )
+    return db_execute(
+        "SELECT * FROM sessions WHERE session_id = ?",
+        (session_id,), fetchone=True,
+    )
 
 
 def get_current_df(session_id: str) -> pd.DataFrame:
@@ -98,10 +167,16 @@ def get_current_df(session_id: str) -> pd.DataFrame:
 def save_cleaned(df: pd.DataFrame, session_id: str, ext: str = ".csv"):
     path = str(UPLOAD_FOLDER / f"{session_id}_cleaned{ext}")
     save_df(df, path)
-    conn = get_db()
-    conn.execute("UPDATE sessions SET cleaned_path=? WHERE session_id=?", (path, session_id))
-    conn.commit()
-    conn.close()
+    if USE_MYSQL:
+        db_execute(
+            "UPDATE sessions SET cleaned_path = %s WHERE session_id = %s",
+            (path, session_id), commit=True,
+        )
+    else:
+        db_execute(
+            "UPDATE sessions SET cleaned_path = ? WHERE session_id = ?",
+            (path, session_id), commit=True,
+        )
     return path
 
 
@@ -109,7 +184,7 @@ def df_to_json_safe(df: pd.DataFrame) -> list:
     return json.loads(df.head(200).to_json(orient="records", default_handler=str))
 
 
-# ─── Endpoints ─────────────────────────────────────────────────────────────────
+# ─── Endpoints ────────────────────────────────────────────────────────────────
 @app.route("/api/upload", methods=["POST"])
 def upload():
     if "file" not in request.files:
@@ -131,13 +206,27 @@ def upload():
         df = load_df(save_path)
     except Exception as e:
         return jsonify({"error": f"Could not parse file: {str(e)}"}), 400
-    conn = get_db()
-    conn.execute("INSERT INTO sessions VALUES (?,?,?,?,?)",
-                 (session_id, file.filename, datetime.utcnow().isoformat(), save_path, None))
-    conn.commit()
-    conn.close()
-    return jsonify({"session_id": session_id, "filename": file.filename,
-                    "rows": df.shape[0], "columns": df.shape[1], "column_names": df.columns.tolist()})
+
+    if USE_MYSQL:
+        db_execute(
+            "INSERT INTO sessions (session_id, original_filename, upload_time, original_path, cleaned_path) VALUES (%s, %s, %s, %s, %s)",
+            (session_id, file.filename, datetime.utcnow().isoformat(), save_path, None),
+            commit=True,
+        )
+    else:
+        db_execute(
+            "INSERT INTO sessions VALUES (?, ?, ?, ?, ?)",
+            (session_id, file.filename, datetime.utcnow().isoformat(), save_path, None),
+            commit=True,
+        )
+
+    return jsonify({
+        "session_id": session_id,
+        "filename": file.filename,
+        "rows": df.shape[0],
+        "columns": df.shape[1],
+        "column_names": df.columns.tolist(),
+    })
 
 
 @app.route("/api/preview", methods=["GET"])
@@ -148,8 +237,12 @@ def preview():
         df = get_current_df(session_id)
     except ValueError as e:
         return jsonify({"error": str(e)}), 404
-    return jsonify({"rows": df_to_json_safe(df.head(n)), "columns": df.columns.tolist(),
-                    "total_rows": len(df), "total_columns": df.shape[1]})
+    return jsonify({
+        "rows": df_to_json_safe(df.head(n)),
+        "columns": df.columns.tolist(),
+        "total_rows": len(df),
+        "total_columns": df.shape[1],
+    })
 
 
 @app.route("/api/summary", methods=["GET"])
@@ -167,10 +260,16 @@ def summary():
     suggestions = cl.get_suggested_actions(df)
     dtypes = cl.get_data_types_summary(df)
     describe_raw = df.describe(include="all").to_dict()
-    describe_safe = {col: {k: (None if (isinstance(v, float) and np.isnan(v)) else v) for k, v in vd.items()} for col, vd in describe_raw.items()}
-    return jsonify({"missing": missing, "duplicates": duplicates, "outliers": outliers,
-                    "quality": quality, "insights": insights, "suggestions": suggestions,
-                    "data_types": dtypes, "describe": describe_safe, "rows": df.shape[0], "columns": df.shape[1]})
+    describe_safe = {
+        col: {k: (None if (isinstance(v, float) and np.isnan(v)) else v) for k, v in vd.items()}
+        for col, vd in describe_raw.items()
+    }
+    return jsonify({
+        "missing": missing, "duplicates": duplicates, "outliers": outliers,
+        "quality": quality, "insights": insights, "suggestions": suggestions,
+        "data_types": dtypes, "describe": describe_safe,
+        "rows": df.shape[0], "columns": df.shape[1],
+    })
 
 
 @app.route("/api/clean/missing", methods=["POST"])
@@ -186,9 +285,11 @@ def clean_missing():
     before_rows = len(df)
     cleaned = cl.drop_missing(df) if strategy == "drop" else cl.fill_missing(df, strategy)
     save_cleaned(cleaned, session_id)
-    return jsonify({"message": f"Missing values handled using '{strategy}' strategy.",
-                    "before": {"missing": before_missing, "rows": before_rows},
-                    "after": {"missing": int(cleaned.isnull().sum().sum()), "rows": len(cleaned)}})
+    return jsonify({
+        "message": f"Missing values handled using '{strategy}' strategy.",
+        "before": {"missing": before_missing, "rows": before_rows},
+        "after": {"missing": int(cleaned.isnull().sum().sum()), "rows": len(cleaned)},
+    })
 
 
 @app.route("/api/clean/duplicates", methods=["POST"])
@@ -201,7 +302,11 @@ def clean_duplicates():
     before = int(df.duplicated().sum())
     cleaned = cl.remove_duplicates(df)
     save_cleaned(cleaned, session_id)
-    return jsonify({"message": "Duplicate rows removed.", "before": {"duplicates": before, "rows": len(df)}, "after": {"duplicates": 0, "rows": len(cleaned)}})
+    return jsonify({
+        "message": "Duplicate rows removed.",
+        "before": {"duplicates": before, "rows": len(df)},
+        "after": {"duplicates": 0, "rows": len(cleaned)},
+    })
 
 
 @app.route("/api/clean/outliers", methods=["POST"])
@@ -214,7 +319,11 @@ def clean_outliers():
     oi = cl.detect_outliers(df)
     cleaned = cl.remove_outliers(df)
     save_cleaned(cleaned, session_id)
-    return jsonify({"message": "Outliers removed using IQR method.", "before": {"outliers": oi["total_outliers"], "rows": len(df)}, "after": {"outliers": 0, "rows": len(cleaned)}})
+    return jsonify({
+        "message": "Outliers removed using IQR method.",
+        "before": {"outliers": oi["total_outliers"], "rows": len(df)},
+        "after": {"outliers": 0, "rows": len(cleaned)},
+    })
 
 
 @app.route("/api/clean/normalize", methods=["POST"])
@@ -252,9 +361,14 @@ def visualize():
         current_df = get_current_df(session_id)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-    return jsonify({"bar_charts": viz.bar_chart_data(current_df), "histograms": viz.histogram_data(current_df),
-                    "boxplots": viz.boxplot_data(current_df), "correlation": viz.correlation_matrix(current_df),
-                    "missing_heatmap": viz.missing_heatmap(original_df), "before_after": viz.before_after_comparison(original_df, current_df)})
+    return jsonify({
+        "bar_charts": viz.bar_chart_data(current_df),
+        "histograms": viz.histogram_data(current_df),
+        "boxplots": viz.boxplot_data(current_df),
+        "correlation": viz.correlation_matrix(current_df),
+        "missing_heatmap": viz.missing_heatmap(original_df),
+        "before_after": viz.before_after_comparison(original_df, current_df),
+    })
 
 
 @app.route("/api/download", methods=["GET"])
@@ -305,25 +419,31 @@ def report():
         lines.append(f"  {col}: {info['count']} ({info['pct']}%)")
     buf = io.BytesIO("\n".join(lines).encode())
     buf.seek(0)
-    return send_file(buf, mimetype="text/plain", as_attachment=True, download_name=f"quality_report_{session_id[:8]}.txt")
+    return send_file(buf, mimetype="text/plain", as_attachment=True,
+                     download_name=f"quality_report_{session_id[:8]}.txt")
 
 
 @app.route("/api/reset", methods=["POST"])
 def reset():
     session_id = request.args.get("session_id")
-    conn = get_db()
-    conn.execute("UPDATE sessions SET cleaned_path=NULL WHERE session_id=?", (session_id,))
-    conn.commit()
-    conn.close()
+    if USE_MYSQL:
+        db_execute(
+            "UPDATE sessions SET cleaned_path = NULL WHERE session_id = %s",
+            (session_id,), commit=True,
+        )
+    else:
+        db_execute(
+            "UPDATE sessions SET cleaned_path = NULL WHERE session_id = ?",
+            (session_id,), commit=True,
+        )
     return jsonify({"message": "Dataset reset to original."})
 
 
 @app.route("/api/health", methods=["GET"])
 def health():
-    return jsonify({"status": "ok"})
+    db_info = "mysql" if USE_MYSQL else "sqlite"
+    return jsonify({"status": "ok", "db": db_info})
 
 
-# Vercel expects a WSGI `app` object at module level — already defined above.
-# For local dev: python index.py
 if __name__ == "__main__":
     app.run(debug=True, port=5000)

@@ -250,12 +250,18 @@ def login():
     if not user or not check_password_hash(user["password_hash"], password):
         return jsonify({"error": "Invalid email or password"}), 401
         
+    # sqlite3.Row might preserve original column names, let's be safe:
+    user_id = user.get("id") or user.get("ID")
+    if not user_id:
+        # Fallback if primary key was returned weirdly
+        user_id = list(user.values())[0] if user else None
+
     return jsonify({
         "message": "Login successful",
         "user": {
-            "id": user["id"],
-            "name": user["name"],
-            "email": user["email"]
+            "id": user_id,
+            "name": user.get("name"),
+            "email": user.get("email")
         }
     })
 

@@ -10,6 +10,7 @@ import Visualize from './pages/Visualize'
 import Export from './pages/Export'
 import Login from './pages/Login'
 import Register from './pages/Register'
+import PrivateRoute from './components/PrivateRoute'
 
 export default function App() {
   return (
@@ -20,11 +21,11 @@ export default function App() {
             <Navbar />
             <main>
               <Routes>
-                <Route path="/" element={<Home />} />
-                <Route path="/upload" element={<Upload />} />
-                <Route path="/clean" element={<CleanDashboard />} />
-                <Route path="/visualize" element={<Visualize />} />
-                <Route path="/export" element={<Export />} />
+                <Route path="/" element={<PrivateRoute><Home /></PrivateRoute>} />
+                <Route path="/upload" element={<PrivateRoute><Upload /></PrivateRoute>} />
+                <Route path="/clean" element={<PrivateRoute><CleanDashboard /></PrivateRoute>} />
+                <Route path="/visualize" element={<PrivateRoute><Visualize /></PrivateRoute>} />
+                <Route path="/export" element={<PrivateRoute><Export /></PrivateRoute>} />
                 <Route path="/login" element={<Login />} />
                 <Route path="/register" element={<Register />} />
               </Routes>

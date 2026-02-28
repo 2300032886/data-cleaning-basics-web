@@ -2,7 +2,7 @@ import { useNavigate } from 'react-router-dom'
 import { Upload, Zap, BarChart2, Download, Shield, TrendingUp, ArrowRight, Star } from 'lucide-react'
 
 const features = [
-    { icon: '📤', title: 'Upload Any Dataset', desc: 'Drag & drop CSV or Excel files up to 50 MB. Instant preview upon upload.', color: '#6366f1' },
+    { icon: '📤', title: 'Upload Any Dataset', desc: 'Drag & drop CSV or Excel files of any size. Instant preview upon upload.', color: '#6366f1' },
     { icon: '🧹', title: 'Auto-Clean Data', desc: 'Handle nulls, duplicates, and outliers automatically with one click.', color: '#22d3ee' },
     { icon: '📊', title: 'Interactive Charts', desc: 'Bar charts, histograms, box plots, and correlation heatmaps rendered instantly.', color: '#4ade80' },
     { icon: '🎯', title: 'Quality Score', desc: 'Get a composite data quality score (0–100) with letter grade and insights.', color: '#fbbf24' },
@@ -70,7 +70,7 @@ export default function Home() {
 
                 {/* Stats row */}
                 <div style={{ display: 'flex', gap: '2.5rem', justifyContent: 'center', marginTop: '3rem', flexWrap: 'wrap' }}>
-                    {[['10+', 'Clean Operations'], ['5', 'Chart Types'], ['0–100', 'Quality Score'], ['50MB', 'Max File Size']].map(([v, l]) => (
+                    {[['10+', 'Clean Operations'], ['5', 'Chart Types'], ['0–100', 'Quality Score']].map(([v, l]) => (
                         <div key={l} style={{ textAlign: 'center' }}>
                             <div style={{ fontSize: '1.6rem', fontWeight: 800, color: '#6366f1' }}>{v}</div>
                             <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: 2 }}>{l}</div>

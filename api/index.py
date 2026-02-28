@@ -278,8 +278,6 @@ def upload():
     if ext not in (".csv", ".xlsx", ".xls"):
         return jsonify({"error": "Only CSV and XLSX files are supported"}), 400
     content = file.read()
-    if len(content) > MAX_FILE_SIZE:
-        return jsonify({"error": "File size exceeds 50 MB limit"}), 400
     session_id = str(uuid.uuid4())
     save_path = str(UPLOAD_FOLDER / f"{session_id}_original{ext}")
     with open(save_path, "wb") as f:

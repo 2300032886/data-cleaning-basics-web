@@ -25,6 +25,7 @@ else:
 
 import pandas as pd
 import numpy as np
+from werkzeug.security import generate_password_hash, check_password_hash
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 
@@ -97,7 +98,7 @@ def db_execute(sql, params=(), fetchone=False, fetchall=False, commit=False):
 
 def init_db():
     if USE_MYSQL:
-        sql = """
+        sql_sessions = """
             CREATE TABLE IF NOT EXISTS sessions (
                 session_id        VARCHAR(36) PRIMARY KEY,
                 original_filename VARCHAR(255),
@@ -106,8 +107,17 @@ def init_db():
                 cleaned_path      TEXT
             )
         """
+        sql_users = """
+            CREATE TABLE IF NOT EXISTS users (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                name VARCHAR(255) NOT NULL,
+                email VARCHAR(255) UNIQUE NOT NULL,
+                password_hash VARCHAR(255) NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """
     else:
-        sql = """
+        sql_sessions = """
             CREATE TABLE IF NOT EXISTS sessions (
                 session_id        TEXT PRIMARY KEY,
                 original_filename TEXT,
@@ -116,7 +126,17 @@ def init_db():
                 cleaned_path      TEXT
             )
         """
-    db_execute(sql, commit=True)
+        sql_users = """
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                email TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """
+    db_execute(sql_sessions, commit=True)
+    db_execute(sql_users, commit=True)
 
 
 init_db()
@@ -182,6 +202,62 @@ def save_cleaned(df: pd.DataFrame, session_id: str, ext: str = ".csv"):
 
 def df_to_json_safe(df: pd.DataFrame) -> list:
     return json.loads(df.head(200).to_json(orient="records", default_handler=str))
+
+
+# ─── Auth Endpoints ───────────────────────────────────────────────────────────
+@app.route("/api/register", methods=["POST"])
+def register():
+    data = request.get_json(silent=True) or {}
+    name = data.get("name")
+    email = data.get("email")
+    password = data.get("password")
+    
+    if not name or not email or not password:
+        return jsonify({"error": "Name, email, and password are required"}), 400
+        
+    password_hash = generate_password_hash(password)
+    
+    try:
+        if USE_MYSQL:
+            db_execute(
+                "INSERT INTO users (name, email, password_hash) VALUES (%s, %s, %s)",
+                (name, email, password_hash), commit=True
+            )
+        else:
+            db_execute(
+                "INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)",
+                (name, email, password_hash), commit=True
+            )
+        return jsonify({"message": "User registered successfully"}), 201
+    except Exception as e:
+        return jsonify({"error": "Email already exists or invalid data"}), 400
+
+
+@app.route("/api/login", methods=["POST"])
+def login():
+    data = request.get_json(silent=True) or {}
+    email = data.get("email")
+    password = data.get("password")
+    
+    if not email or not password:
+        return jsonify({"error": "Email and password are required"}), 400
+        
+    if USE_MYSQL:
+        user = db_execute("SELECT * FROM users WHERE email = %s", (email,), fetchone=True)
+    else:
+        user = db_execute("SELECT * FROM users WHERE email = ?", (email,), fetchone=True)
+        
+    if not user or not check_password_hash(user["password_hash"], password):
+        return jsonify({"error": "Invalid email or password"}), 401
+        
+    return jsonify({
+        "message": "Login successful",
+        "user": {
+            "id": user["id"],
+            "name": user["name"],
+            "email": user["email"]
+        }
+    })
 
 
 # ─── Endpoints ────────────────────────────────────────────────────────────────

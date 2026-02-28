@@ -1,9 +1,10 @@
 import { NavLink } from 'react-router-dom'
 import {
-    Home, Upload, Wand2, BarChart2, Download, Sun, Moon, Database, Menu, X,
+    Home, Upload, Wand2, BarChart2, Download, Sun, Moon, Database, Menu, X, LogIn, LogOut, UserPlus, User
 } from 'lucide-react'
 import { useState } from 'react'
 import { useApp } from '../context/AppContext'
+import { useAuth } from '../context/AuthContext'
 
 const links = [
     { to: '/', label: 'Home', icon: Home, exact: true },
@@ -15,6 +16,7 @@ const links = [
 
 export default function Navbar() {
     const { theme, toggleTheme, filename, sessionId } = useApp()
+    const { isAuthenticated, user, logout } = useAuth()
     const [mobileOpen, setMobileOpen] = useState(false)
 
     return (
@@ -70,6 +72,29 @@ export default function Navbar() {
                             {label}
                         </NavLink>
                     ))}
+
+                    <div style={{ width: 1, height: 24, background: 'var(--border)', margin: '0 0.5rem' }} />
+
+                    {!isAuthenticated ? (
+                        <>
+                            <NavLink to="/login" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.45rem 0.9rem', borderRadius: '0.5rem', fontSize: '0.88rem', fontWeight: 600, color: 'var(--text-primary)', textDecoration: 'none' }}>
+                                <LogIn size={15} /> Login
+                            </NavLink>
+                            <NavLink to="/register" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.45rem 0.9rem', borderRadius: '0.5rem', fontSize: '0.88rem', fontWeight: 600, color: 'white', background: '#6366f1', textDecoration: 'none' }}>
+                                <UserPlus size={15} /> Sign Up
+                            </NavLink>
+                        </>
+                    ) : (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginLeft: '0.25rem' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.35rem 0.75rem', borderRadius: '0.5rem', background: 'var(--bg-input)', border: '1px solid var(--border)' }}>
+                                <User size={14} color="var(--text-secondary)" />
+                                <span style={{ fontSize: '0.88rem', fontWeight: 600, color: 'var(--text-primary)' }}>{user?.name || 'User'}</span>
+                            </div>
+                            <button onClick={logout} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.45rem 0.6rem', borderRadius: '0.5rem', fontSize: '0.88rem', fontWeight: 600, color: '#f87171', background: 'transparent', border: 'none', cursor: 'pointer' }} title="Logout">
+                                <LogOut size={16} />
+                            </button>
+                        </div>
+                    )}
                 </div>
 
                 {/* Theme toggle */}
@@ -121,6 +146,23 @@ export default function Navbar() {
                             {label}
                         </NavLink>
                     ))}
+
+                    <div style={{ height: 1, background: 'var(--border)', margin: '0.75rem 0' }} />
+
+                    {!isAuthenticated ? (
+                        <>
+                            <NavLink to="/login" onClick={() => setMobileOpen(false)} style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', padding: '0.65rem 0.9rem', borderRadius: '0.5rem', fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-primary)', textDecoration: 'none', marginBottom: '0.25rem' }}>
+                                <LogIn size={17} /> Login
+                            </NavLink>
+                            <NavLink to="/register" onClick={() => setMobileOpen(false)} style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', padding: '0.65rem 0.9rem', borderRadius: '0.5rem', fontSize: '0.9rem', fontWeight: 600, color: 'white', background: '#6366f1', textDecoration: 'none' }}>
+                                <UserPlus size={17} /> Sign Up
+                            </NavLink>
+                        </>
+                    ) : (
+                        <button onClick={() => { logout(); setMobileOpen(false); }} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: '0.6rem', padding: '0.65rem 0.9rem', borderRadius: '0.5rem', fontSize: '0.9rem', fontWeight: 600, color: '#f87171', background: 'transparent', border: 'none', cursor: 'pointer', textAlign: 'left' }}>
+                            <LogOut size={17} /> Logout ({user?.name || 'User'})
+                        </button>
+                    )}
                 </div>
             )}
 
